@@ -39,20 +39,17 @@ enum class DepthOfFieldRenderOrder : int
 	Randomized,
 };
 
-
 enum class DepthOfFieldBlurType : int
 {
 	ApertureShape,
 	Circular,
 };
 
-
 enum class DepthOfFieldFrameWaitType : int
 {
 	Fast,
 	Classic,
 };
-
 
 enum class ScreenshotControllerState : int
 {
@@ -61,7 +58,6 @@ enum class ScreenshotControllerState : int
 	SavingShots,
 	Canceling,
 };
-
 
 enum class DepthOfFieldControllerState : int
 {
@@ -73,7 +69,6 @@ enum class DepthOfFieldControllerState : int
 	Cancelling,		// user cancels the session and things go back to off
 };
 
-
 enum class DepthOfFieldCAType : int
 {
 	RGB,
@@ -82,14 +77,12 @@ enum class DepthOfFieldCAType : int
 	BG
 };
 
-
-enum class DepthOfFieldColorChannel :int
+enum class DepthOfFieldColorChannel : int
 {
 	Red,
 	Green,
 	Blue
 };
-
 
 enum class DepthOfFieldRenderFrameState : int
 {
@@ -99,14 +92,13 @@ enum class DepthOfFieldRenderFrameState : int
 	FrameBlending,	// Currently in the blending operation. 
 };
 
-
 enum class ScreenshotType : int
 {
 	HorizontalPanorama = 0,
 	MultiShot = 1,
 	DebugGrid = 2,
+	MultiView = 3  // New enum value for MultiView
 };
-
 
 enum class ScreenshotFiletype : int
 {
@@ -114,7 +106,6 @@ enum class ScreenshotFiletype : int
 	Jpeg,
 	Png
 };
-
 
 enum class ScreenshotSessionStartReturnCode : int
 {
@@ -125,4 +116,3 @@ enum class ScreenshotSessionStartReturnCode : int
 	Error_CameraFeatureNotAvailable = 4,
 	Error_UnknownError = 5
 };
-
