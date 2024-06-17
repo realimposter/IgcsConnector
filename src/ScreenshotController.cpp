@@ -39,6 +39,7 @@
 #include "std_image_write.h"
 #include "Utils.h"
 #include <thread>
+#include <random>
 
 #include "fpng.h"
 
@@ -298,6 +299,34 @@ void ScreenshotController::startDebugGridShot()
 }
 
 
+void ScreenshotController::startMultiViewShot(int numberOfShots, bool isTestRun)
+{
+	if(!_cameraToolsConnector.cameraToolsConnected())
+	{
+		return;
+	}
+
+	reset();
+	_isTestRun = isTestRun;
+	_numberOfShotsToTake = numberOfShots;
+	_typeOfShot = ScreenshotType::MultiView;
+
+	// tell the camera tools we're starting a session.
+	if(!startSession())
+	{
+		return;
+	}
+
+	// set convolution counter to its initial value
+	_convolutionFrameCounter = _numberOfFramesToWaitBetweenSteps;
+	_state = ScreenshotControllerState::InSession;
+
+	// Create a thread which will handle the end of the shot session as the shot taking is done by event handlers
+	std::thread t(&ScreenshotController::completeShotSession, this);
+	t.detach();
+}
+
+
 std::string ScreenshotController::createScreenshotFolder()
 {
 	time_t t = time(nullptr);
@@ -322,6 +351,9 @@ void ScreenshotController::modifyCamera()
 	case ScreenshotType::MultiShot:
 		moveCameraForLightfield(1, false);
 		break;
+	case ScreenshotType::MultiView:
+		moveCameraForMultiView();
+		break;
 #ifdef _DEBUG
 	case ScreenshotType::DebugGrid:
 		moveCameraForDebugGrid(_shotCounter, false);
@@ -341,6 +373,8 @@ std::string ScreenshotController::typeOfShotAsString()
 		return "HorizontalPanorama";
 	case ScreenshotType::MultiShot:
 		return "Lightfield";
+	case ScreenshotType::MultiView:
+		return "MultiView";
 #ifdef _DEBUG
 	case ScreenshotType::DebugGrid:
 		return "DebugGrid";
@@ -395,6 +429,24 @@ void ScreenshotController::moveCameraForDebugGrid(int shotCounter, bool end)
 	// we don't know the movement speed, so we pass the distance to the camera, and the camere has to divide by movement speed so it's independent of movement speed.
 	// we don't move up/down so we pass in 0. We don't change the fov and the step is relative to the current camera location.
 	_cameraToolsConnector.moveCameraMultishot(horizontalStep, verticalStep, (shotCounter % 5) * 10.0f, true);
+}
+
+void ScreenshotController::moveCameraForMultiView()
+{
+	// Generate random positions and angles relative to the current camera position
+	std::random_device rd;
+	std::mt19937 gen(rd());
+	std::uniform_real_distribution<> dis(-10.0, 10.0);
+
+	float randomX = dis(gen);
+	float randomY = dis(gen);
+	float randomZ = dis(gen);
+	float randomPitch = dis(gen);
+	float randomYaw = dis(gen);
+
+	// Move the camera to the new random position and angle
+	_cameraToolsConnector.moveCameraMultishot(randomX, randomY, randomZ, false);
+	_cameraToolsConnector.rotateCamera(randomPitch, randomYaw, 0.0f);
 }
 
 
