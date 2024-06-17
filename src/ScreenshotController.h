@@ -50,6 +50,7 @@ public:
 	void startHorizontalPanoramaShot(float totalFoVInDegrees, float overlapPercentagePerPanoShot, float currentFoVInDegrees, bool isTestRun);
 	void startLightfieldShot(float distancePerStep, int numberOfShots, bool isTestRun);
 	void startDebugGridShot();
+	void startMultiViewShot(int numberOfShots, bool isTestRun);
 	ScreenshotControllerState getState() { return _state; }
 	void reset();
 	bool shouldTakeShot();		// returns true if a shot should be taken, false otherwise. 
@@ -73,6 +74,7 @@ private:
 	void moveCameraForLightfield(int direction, bool end);
 	void moveCameraForPanorama(int direction, bool end);
 	void moveCameraForDebugGrid(int shotCounter, bool end);
+	void moveCameraForMultiView();
 	void modifyCamera();
 	std::string typeOfShotAsString();
 	CameraToolsConnector& _cameraToolsConnector;
@@ -101,5 +103,3 @@ private:
 	std::condition_variable _waitCompletionHandle;
 
 };
-
-
