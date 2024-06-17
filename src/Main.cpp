@@ -42,6 +42,8 @@
 #include <Psapi.h>
 #include <sstream>
 #include <string>
+#include <chrono>
+#include <thread>
 
 #include "CameraToolsData.h"
 #include "CDataFile.h"
@@ -54,6 +56,7 @@
 #include "WorkItem.h"
 
 using namespace reshade::api;
+using namespace std::chrono;
 
 // externs for reshade
 extern "C" __declspec(dllexport) const char *NAME = "IGCS Connector";
@@ -74,6 +77,7 @@ extern "C" __declspec(dllexport) void setReshadeState(int pathIndex, int stateIn
 extern "C" __declspec(dllexport) void updateStateSnapshotOnPath(int pathIndex, int stateIndex);
 
 #define SETTINGS_FILE_NAME "IgcsConnector.ini"
+#define MULTI_VIEW_KEY VK_F6 // Define the key for starting multi-view screenshots
 
 static LPBYTE g_dataFromCameraToolsBuffer = nullptr;		// 8192 bytes buffer
 static CameraToolsConnector g_cameraToolsConnector;
@@ -83,6 +87,8 @@ static DepthOfFieldController g_depthOfFieldController(g_cameraToolsConnector);
 static ReshadeStateController g_reshadeStateController;
 static IGCS::ThreadSafeQueue<WorkItem> g_presentWorkQueue;
 static bool g_recordReshadeState = true;
+static bool g_multiViewActive = false;  // Flag to check if multi-view is active
+static high_resolution_clock::time_point g_lastScreenshotTime; // Last screenshot time
 
 /// <summary>
 /// Entry point for IGCS camera tools. Call this to initialize the buffers. Obtain the buffers using the getDataFrom/ToCameraToolsBuffer functions
@@ -199,7 +205,7 @@ void appendStateSnapshotAfterSnapshotOnPath(int pathIndex, int indexToAppendAfte
 /// Update the state at offset stateIndex on path with index pathIndex to the current state
 /// </summary>
 /// <param name="pathIndex"></param>
-/// <param name="stateIndex"></param>
+/// <param="stateIndex"></param>
 void updateStateSnapshotOnPath(int pathIndex, int stateIndex)
 {
 	if(!g_recordReshadeState)
@@ -276,12 +282,34 @@ void handleWorkQueue(effect_runtime* runtime)
 	}
 }
 
+void handleMultiViewScreenshot()
+{
+	if (g_multiViewActive)
+	{
+		auto now = high_resolution_clock::now();
+		if (duration_cast<seconds>(now - g_lastScreenshotTime).count() >= 5)
+		{
+			g_screenshotController.configure(g_screenshotSettings.screenshotFolder, g_screenshotSettings.numberOfFramesToWaitBetweenSteps, (ScreenshotFiletype)g_screenshotSettings.screenshotFileType);
+			g_screenshotController.startMultiViewShot(g_screenshotSettings.multiView_numberOfShots, false);
+			g_lastScreenshotTime = now;
+		}
+	}
+}
+
+void checkKeyPresses()
+{
+	if (GetAsyncKeyState(MULTI_VIEW_KEY) & 0x8000)
+	{
+		g_multiViewActive = !g_multiViewActive;
+		g_lastScreenshotTime = high_resolution_clock::now();
+		OverlayControl::addNotification(g_multiViewActive ? "Multi-view screenshot started." : "Multi-view screenshot stopped.");
+	}
+}
 
 static void onReshadePresent(effect_runtime* runtime)
 {
 	g_screenshotController.presentCalled();
-
-	// handle our work.
+	handleMultiViewScreenshot(); // Add this line to handle multi-view screenshot
 	handleWorkQueue(runtime);
 }
 
@@ -322,6 +350,9 @@ static void startScreenshotSession(bool isTestRun)
 		break;
 	case (int)ScreenshotType::MultiShot:
 		g_screenshotController.startLightfieldShot(g_screenshotSettings.lightField_distanceBetweenShots, g_screenshotSettings.lightField_numberOfShotsToTake, isTestRun);
+		break;
+	case (int)ScreenshotType::MultiView:
+		g_screenshotController.startMultiViewShot(g_screenshotSettings.multiView_numberOfShots, isTestRun);
 		break;
 #ifdef _DEBUG
 	case (int)ScreenshotType::DebugGrid:
@@ -459,6 +490,9 @@ static void displaySettings(reshade::api::effect_runtime* runtime)
 							case (int)ScreenshotType::MultiShot:
 								ImGui::SliderFloat("Distance between Lightfield shots", &g_screenshotSettings.lightField_distanceBetweenShots, 0.0f, 5.0f, "%.3f");
 								ImGui::SliderInt("Number of shots to take", &g_screenshotSettings.lightField_numberOfShotsToTake, 0, 60);
+								break;
+							case (int)ScreenshotType::MultiView:
+								ImGui::SliderInt("Number of MultiView shots", &g_screenshotSettings.multiView_numberOfShots, 1, 50);
 								break;
 								// others: ignore.
 						}
@@ -943,9 +977,35 @@ static void displaySettings(reshade::api::effect_runtime* runtime)
 		}
 	}
 	ImGui::AlignTextToFramePadding();
-	if(ImGui::CollapsingHeader("Camera path info"))
+	if (ImGui::CollapsingHeader("Camera tools info"))
 	{
-		if(nullptr==g_dataFromCameraToolsBuffer)
+		if (nullptr == g_dataFromCameraToolsBuffer)
+		{
+			ImGui::Text("Camera data not available");
+		}
+		else
+		{
+			// display camera info
+			std::ostringstream stringStream;
+			stringStream << std::fixed << std::setprecision(2) << cameraData->fov;
+			const std::string fovAsString = stringStream.str();
+			ImGui::Text(cameraData->cameraEnabled ? "Camera enabled" : "Camera disabled");
+			ImGui::Text(cameraData->cameraMovementLocked ? "Camera movement locked" : "Camera movement unlocked");
+			ImGui::InputText("FoV (degrees)", (char*)fovAsString.c_str(), fovAsString.length(), ImGuiInputTextFlags_ReadOnly);
+			ImGui::InputFloat3("Camera coordinates", cameraData->coordinates.values, "%.4f", ImGuiInputTextFlags_ReadOnly);
+			ImGui::InputFloat4("Camera look quaternion", cameraData->lookQuaternion.values, "%.3f", ImGuiInputTextFlags_ReadOnly);
+			ImGui::InputFloat3("Rotation matrix Right", cameraData->rotationMatrixRightVector.values, "%.3f", ImGuiInputTextFlags_ReadOnly);
+			ImGui::InputFloat3("Rotation matrix Up", cameraData->rotationMatrixUpVector.values, "%.3f", ImGuiInputTextFlags_ReadOnly);
+			ImGui::InputFloat3("Rotation matrix Forward", cameraData->rotationMatrixForwardVector.values, "%.3f", ImGuiInputTextFlags_ReadOnly);
+			ImGui::InputFloat("Pitch (radians)", &cameraData->pitch, ImGuiInputTextFlags_ReadOnly);
+			ImGui::InputFloat("Yaw (radians)", &cameraData->yaw, ImGuiInputTextFlags_ReadOnly);
+			ImGui::InputFloat("Roll (radians)", &cameraData->roll, ImGuiInputTextFlags_ReadOnly);
+		}
+	}
+	ImGui::AlignTextToFramePadding();
+	if (ImGui::CollapsingHeader("Camera path info"))
+	{
+		if (nullptr == g_dataFromCameraToolsBuffer)
 		{
 			ImGui::Text("Camera path info not available");
 		}
@@ -955,13 +1015,13 @@ static void displaySettings(reshade::api::effect_runtime* runtime)
 			ImGui::Text("Number of saved ReShade states per path:");
 
 			const auto numberOfPaths = g_reshadeStateController.numberOfPaths();
-			if(numberOfPaths<=0)
+			if (numberOfPaths <= 0)
 			{
 				ImGui::Text("None.");
 			}
 			else
 			{
-				for(int i = 0; i < numberOfPaths; i++)
+				for (int i = 0; i < numberOfPaths; i++)
 				{
 					// path no's are starting at 0 but for display purposes we start at 1.
 					ImGui::Text("Path: %d. # of saved Reshade states: %d.", (i + 1), g_reshadeStateController.numberOfSnapshotsOnPath(i));
@@ -969,178 +1029,4 @@ static void displaySettings(reshade::api::effect_runtime* runtime)
 			}
 		}
 	}
-}
-
-
-void sendCameraToolsDataToUniforms(effect_runtime* runtime)
-{
-	// the following source variables are defined with their types:
-	// IGCS_cameraDataAvailable			bool
-	// IGCS_cameraEnabled				bool
-	// IGCS_cameraMovementLocked		bool
-	// IGCS_cameraFoV					float		degrees
-	// IGCS_cameraWorldPosition			float3
-	// IGCS_cameraOrientation			float4		quaternion (x,y,z,w)
-	// IGCS_cameraViewMatrix4x4			float4x4
-	// IGCS_cameraProjectionMatrix4x4LH	float4x4	calculated from fov + aspect ratio + near of 0.1 and far of 10000.0, using left handed row major DirectX math
-	// IGCS_cameraUp					float3		up vector of 3x3 part of view matrix
-	// IGCS_cameraRight					float3		right vector of 3x3 part of view matrix
- 	// IGCS_cameraForward				float3		forward vector of 3x3 part of view matrix
-	// IGCS_cameraRotationPitch			float		radians
-	// IGCS_cameraRotationYaw			float		radians
-	// IGCS_cameraRotationRoll			float		radians
-	const auto cameraData = (CameraToolsData*)g_dataFromCameraToolsBuffer;
-	if(nullptr==cameraData)
-	{
-		runtime->enumerate_uniform_variables(nullptr, [](effect_runtime* runtime, effect_uniform_variable variable)
-		{
-			char source[32];
-			if(runtime->get_annotation_string_from_uniform_variable(variable, "source", source) && std::strcmp(source, "IGCS_cameraDataAvailable") == 0)
-			{
-				runtime->set_uniform_value_bool(variable, false);
-			}
-		});
-		return;
-	}
-
-	runtime->enumerate_uniform_variables(nullptr, [&cameraData](effect_runtime *runtime, effect_uniform_variable variable) 
-	{
-		char source[64];
-		runtime->get_annotation_string_from_uniform_variable(variable, "source", source);
-		if(std::strcmp(source, "IGCS_cameraDataAvailable") == 0)
-		{
-			runtime->set_uniform_value_bool(variable, true);
-		}
-		else if(std::strcmp(source, "IGCS_cameraEnabled") == 0)
-		{
-			runtime->set_uniform_value_bool(variable, cameraData->cameraEnabled);
-		}
-		else if(std::strcmp(source, "IGCS_cameraMovementLocked") == 0)
-		{
-			runtime->set_uniform_value_bool(variable, cameraData->cameraMovementLocked);
-		}
-		else if(std::strcmp(source, "IGCS_cameraFoV") == 0)
-		{
-			runtime->set_uniform_value_float(variable, cameraData->fov);
-		}
-		else if(std::strcmp(source, "IGCS_cameraWorldPosition") == 0)
-		{
-			runtime->set_uniform_value_float(variable, cameraData->coordinates.x(), cameraData->coordinates.y(), cameraData->coordinates.z());
-		}
-		else if(std::strcmp(source, "IGCS_cameraOrientation") == 0)
-		{
-			runtime->set_uniform_value_float(variable, cameraData->lookQuaternion.x(), cameraData->lookQuaternion.y(), cameraData->lookQuaternion.z(), cameraData->lookQuaternion.w());
-		}
-		else if(std::strcmp(source, "IGCS_cameraViewMatrix4x4") == 0)
-		{
-			const auto matrixAsFlatVector = cameraData->lookQuaternion.toFlatVector();
-			runtime->set_uniform_value_float(variable, &matrixAsFlatVector[0], 16, 0);
-		}
-		else if(std::strcmp(source, "IGCS_cameraProjectionMatrix4x4LH") == 0)
-		{
-			const auto device = runtime->get_device();
-			if(nullptr!=device && cameraData->fov>0)
-			{
-				const auto currentBackBuffer = runtime->get_current_back_buffer();
-				if(currentBackBuffer.handle>0)
-				{
-					const auto description = device->get_resource_desc(currentBackBuffer);
-					const auto width = static_cast<float>(description.texture.width);
-					auto height = static_cast<float>(description.texture.height);
-					if(height<DirectX::g_XMEpsilon.f[0])
-					{
-						height = 0.1;
-					}
-					const auto aspectRatio = width / height;
-					const auto projectionMatrixLH = DirectX::XMMatrixPerspectiveFovLH(IGCS::Utils::degreesToRadians(cameraData->fov), aspectRatio, 0.1f, 10000.0f);
-					const auto projectionMatrixAsFlatVector = IGCS::Utils::XMFloat4x4ToFlatVector(projectionMatrixLH);
-					runtime->set_uniform_value_float(variable, &projectionMatrixAsFlatVector[0], 16, 0);
-				}
-			}
-		}
-		else if(std::strcmp(source, "IGCS_cameraRotationPitch") == 0)
-		{
-			runtime->set_uniform_value_float(variable, cameraData->pitch);
-		}
-		else if(std::strcmp(source, "IGCS_cameraRotationYaw") == 0)
-		{
-			runtime->set_uniform_value_float(variable, cameraData->yaw);
-		}
-		else if(std::strcmp(source, "IGCS_cameraRotationRoll") == 0)
-		{
-			runtime->set_uniform_value_float(variable, cameraData->roll);
-		}
-		else if(std::strcmp(source, "IGCS_cameraUp") == 0)
-		{
-			runtime->set_uniform_value_float(variable, cameraData->rotationMatrixUpVector.x(), cameraData->rotationMatrixUpVector.y(), cameraData->rotationMatrixUpVector.z());
-		}
-		else if(std::strcmp(source, "IGCS_cameraRight") == 0)
-		{
-			runtime->set_uniform_value_float(variable, cameraData->rotationMatrixRightVector.x(), cameraData->rotationMatrixRightVector.y(), cameraData->rotationMatrixRightVector.z());
-		}
-		else if(std::strcmp(source, "IGCS_cameraForward") == 0)
-		{
-			runtime->set_uniform_value_float(variable, cameraData->rotationMatrixForwardVector.x(), cameraData->rotationMatrixForwardVector.y(), cameraData->rotationMatrixForwardVector.z());
-		}
-		// add more here. 
-	});
-}
-
-
-void onReshadeReloadEffects(effect_runtime* runtime)
-{
-	// This call can be made in various scenarios, but they have either one of 2 characteristics: 1) there are 0 effects or 2) there are effects but they're changing.
-	// We can safely ignore the first one, as that's the one originating from the call to destroy_effects. All the other scenarios are from update_effects which is
-	// called in on_present and will end up raising the event in multiple scenarios.
-	g_reshadeStateController.migrateContainedHandles(runtime);
-	g_depthOfFieldController.migrateReshadeState(runtime);
-}
-
-void onReshadeBeginEffects(effect_runtime* runtime, command_list* cmd_list, resource_view rtv, resource_view rtv_srgb)
-{
-	sendCameraToolsDataToUniforms(runtime);
-	g_depthOfFieldController.reshadeBeginEffectsCalled(runtime);
-}
-
-
-void onReshadeFinishEffects(effect_runtime* runtime, command_list* cmd_list, resource_view rtv, resource_view rtv_srgb)
-{
-	g_depthOfFieldController.reshadeFinishEffectsCalled(runtime);
-}
-
-
-BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID)
-{
-	switch (fdwReason)
-	{
-	case DLL_PROCESS_ATTACH:
-		if (!reshade::register_addon(hModule))
-		{
-			return FALSE;
-		}
-		reshade::register_event<reshade::addon_event::reshade_present>(onReshadePresent);
-		reshade::register_event<reshade::addon_event::reshade_overlay>(onReshadeOverlay);
-		reshade::register_event<reshade::addon_event::reshade_begin_effects>(onReshadeBeginEffects);
-		reshade::register_event<reshade::addon_event::reshade_finish_effects>(onReshadeFinishEffects);
-		reshade::register_event<reshade::addon_event::reshade_reloaded_effects>(onReshadeReloadEffects);
-		reshade::register_overlay(nullptr, &displaySettings);
-		loadIniFile();
-		break;
-	case DLL_PROCESS_DETACH:
-		reshade::unregister_event<reshade::addon_event::reshade_present>(onReshadePresent);
-		reshade::unregister_event<reshade::addon_event::reshade_overlay>(onReshadeOverlay);
-		reshade::unregister_event<reshade::addon_event::reshade_begin_effects>(onReshadeBeginEffects);
-		reshade::unregister_event<reshade::addon_event::reshade_finish_effects>(onReshadeFinishEffects);
-		reshade::unregister_event<reshade::addon_event::reshade_reloaded_effects>(onReshadeReloadEffects);
-		reshade::unregister_overlay(nullptr, &displaySettings);
-		reshade::unregister_addon(hModule);
-		if(nullptr!=g_dataFromCameraToolsBuffer)
-		{
-			free(g_dataFromCameraToolsBuffer);
-		}
-		saveIniFile();
-		break;
-	}
-
-	return TRUE;
 }
