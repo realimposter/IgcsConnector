@@ -41,13 +41,14 @@
 
 struct ScreenshotSettings
 {
-	int typeOfScreenshot = (int)ScreenshotType::HorizontalPanorama;
+	int typeOfScreenshot = (int)ScreenshotType::MultiView;  // Default to MultiView
 	int screenshotFileType = (int)ScreenshotFiletype::Jpeg;
 	int numberOfFramesToWaitBetweenSteps = 1;
 	float lightField_distanceBetweenShots = 1.0f;
 	int lightField_numberOfShotsToTake = 45;
 	float pano_totalAngleDegrees = 110.0f;
 	float pano_overlapPercentagePerShot = 80.0f;
+	int multiView_numberOfShots = 2;  // New setting for MultiView shot
 	char screenshotFolder[_MAX_PATH + 1] = { 0 };
 
 	ScreenshotSettings()
